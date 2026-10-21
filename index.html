@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#D62828">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Sone Waiter">
+<title>Sone · Waiter & Kitchen</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="stylesheet" href="ios.css">
+</head>
+<body>
+<div id="login" class="hide"></div>
+<div id="app" class="hide">
+  <main id="v-orders" class="view active">
+    <header class="navbar">
+      <div class="top"><div class="bold" style="font-size:17px">Live Orders</div><div class="row gap8"><span class="pill green" id="live-pill">● Live</span></div></div>
+      <div class="seg mt8" id="filters"></div>
+    </header>
+    <div style="height:12px"></div>
+    <div id="olist"></div>
+  </main>
+  <main id="v-me" class="view">
+    <header class="navbar"><div class="top"><div class="bold" style="font-size:17px">Settings</div></div></header>
+    <div class="largetitle">Settings</div>
+    <div class="list">
+      <div class="li"><div class="grow"><div class="t" id="me-name"></div><div class="s" id="me-role"></div></div></div>
+      <div class="li"><div class="grow t">🔔 Awaaz / alert</div><label class="sw"><input type="checkbox" id="sw-sound"><i></i></label></div>
+      <div class="li"><div class="grow"><div class="t">📱 Screen on rakhein</div><div class="s">Order aate hi dikhe, phone lock na ho</div></div><label class="sw"><input type="checkbox" id="sw-wake"><i></i></label></div>
+      <button class="li" id="test-sound" style="width:100%;text-align:left"><span class="grow t" style="color:var(--blue)">Awaaz test karein</span></button>
+    </div>
+    <div class="list mt16"><button class="li" id="logout" style="width:100%;text-align:left"><span class="grow t" style="color:var(--red)">Logout</span></button></div>
+    <p class="xs muted" style="text-align:center;padding:24px">Sone Waiter & Kitchen app</p>
+  </main>
+  <button class="fab" id="fab">＋ Table order</button>
+  <nav class="tabbar">
+    <button data-tab="orders" class="active"><span id="t-o"></span>Orders<span class="dot hide" id="new-dot">0</span></button>
+    <button data-tab="me"><span id="t-m"></span>Settings</button>
+  </nav>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="config.js"></script>
+<script src="sone.js"></script>
+<script src="staff.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
