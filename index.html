@@ -274,6 +274,7 @@ body{letter-spacing:-.01em;text-rendering:optimizeLegibility}
     <div class="largetitle">Settings</div>
     <div class="list">
       <div class="li"><div class="grow"><div class="t" id="me-name"></div><div class="s" id="me-role"></div></div></div>
+      <button class="li chev" id="prof-btn" style="width:100%;text-align:left"><span class="grow t">👤 Meri profile (mobile number)</span></button>
       <div class="li"><div class="grow t">🔔 Awaaz / alert</div><label class="sw"><input type="checkbox" id="sw-sound"><i></i></label></div>
       <div class="li"><div class="grow"><div class="t">📱 Screen on rakhein</div><div class="s">Order aate hi dikhe, phone lock na ho</div></div><label class="sw"><input type="checkbox" id="sw-wake"><i></i></label></div>
       <button class="li" id="test-sound" style="width:100%;text-align:left"><span class="grow t" style="color:var(--blue)">Awaaz test karein</span></button>
@@ -635,6 +636,28 @@ window.SONE_CONFIG = {
     $('#kv-ph', sh.el).onclick = async e => { const t = e.currentTarget; t.disabled = true; try { await S.kotShare(o); } finally { t.disabled = false; } };
   };
 
+
+  /* ---------- profile: mobile number ---------- */
+  S.contactsOf = v => { try { const a = typeof v === 'string' ? JSON.parse(v) : v; return Array.isArray(a) ? a : []; } catch (e) { return []; } };
+  S.profileView = function () {
+    const me = S.me, role = me.role === 'owner' ? 'Owner' : 'Waiter';
+    const sh = sheet(`<div class="sh-head"><h3>Meri profile</h3><button class="iconbtn" data-close>✕</button></div>
+      <div class="sh-body"><div class="card"><div class="row" style="gap:12px"><div class="av" style="background:#5B6CE0">${esc((me.name || '?').trim().charAt(0).toUpperCase())}</div><div class="grow"><div class="bold" style="font-size:18px">${esc(me.name)}</div><div class="small muted">${role}</div></div></div>
+        <label class="field mt12"><span>Mera mobile number (10 digit)</span><input class="inp" id="pf-ph" type="tel" inputmode="numeric" maxlength="10" placeholder="98XXXXXXXX" value="${esc(me.phone || '')}"></label>
+        <button class="btn block mt8" id="pf-save">Save karein</button></div>
+        <p class="xs muted pad">${me.role === 'owner' ? 'Customer ko kaun sa number dikhana hai, wo More → "Customer ke liye call numbers" mein chunein.' : 'Ye number sirf owner ko dikhta hai. Customer ko dikhana hai ya nahi, owner tay karta hai.'}</p></div>`);
+    $('#pf-save', sh.el).onclick = async e => {
+      const p = $('#pf-ph', sh.el).value.replace(/\D/g, '').slice(-10);
+      if (p && p.length !== 10) return toast('10 digit ka mobile number likhein', 'err');
+      const b = e.currentTarget; b.disabled = true;
+      try {
+        const { error } = await sb.rpc('set_my_phone', { p_phone: p });
+        if (error) return toast(/function|schema|column|find/i.test(error.message) ? 'Pehle Supabase mein migration SQL run karein' : error.message, 'err');
+        me.phone = p || null; toast(p ? 'Number save ho gaya ✓' : 'Number hata diya', 'ok'); sh.close();
+      } finally { b.disabled = false; }
+    };
+  };
+
   /* ---------- staff performance (kaun kitna order / accept / table serve) ---------- */
   S.perfData = async function (fromStr, toStr) {
     await S.ensureNames();
@@ -751,6 +774,7 @@ window.SONE_CONFIG = {
   $('#test-sound').onclick = () => { chime(2); speak('Naya order aaya hai'); };
   $('#logout').onclick = () => Staff.logout();
   $('#perf-btn').onclick = () => Staff.perfView();
+  $('#prof-btn').onclick = () => Staff.profileView();
   let lock = null;
   async function wake(on) { try { if (on && 'wakeLock' in navigator) lock = await navigator.wakeLock.request('screen'); else if (lock) { lock.release(); lock = null; } } catch (e) {} }
   $('#sw-wake').checked = ls.get('sone_wake', true); $('#sw-wake').onchange = e => { ls.set('sone_wake', e.target.checked); wake(e.target.checked); };
