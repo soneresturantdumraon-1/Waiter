@@ -1212,7 +1212,7 @@ window.SONE_CONFIG = {
   var pfx = Object.keys(E).filter(function (k) { return /[#:·]$/.test(k); }).sort(function (a, b) { return b.length - a.length; });
   var NUMRX = /^([^A-Za-z\d]*)([A-Za-z]+)(\s*[#:·\-]*\s*[\d₹(#].*)$/;
   var cur = 'hi';
-  try { var sv = localStorage.getItem('sone_lang'); if (sv && LANGS.some(function (l) { return l[0] === sv; })) cur = sv; } catch (e) {}
+  try { var sv = localStorage.getItem('sone_lang'); if (sv && (sv === 'hi' || sv === 'en') && LANGS.some(function (l) { return l[0] === sv; })) cur = sv; } catch (e) {}
   var idx = function () { for (var i = 0; i < LANGS.length; i++) if (LANGS[i][0] === cur) return i; return 0; };
 
   function tr(str) {
@@ -1281,7 +1281,7 @@ window.SONE_CONFIG = {
     var b = document.getElementById('langbar');
     if (!b) {
       b = document.createElement('div'); b.id = 'langbar'; b.setAttribute('data-noi18n', '');
-      b.innerHTML = '<div class="lb-t">🌐 भाषा / Language</div><div class="lb-r">' + LANGS.map(function (l) {
+      b.innerHTML = '<div class="lb-t">🌐 भाषा / Language</div><div class="lb-r">' + LANGS.filter(function (l) { return l[0] === 'hi' || l[0] === 'en'; }).map(function (l) {
         return '<button type="button" data-l="' + l[0] + '">' + l[1] + '</button>';
       }).join('') + '</div>';
       b.addEventListener('click', function (e) { var x = e.target.closest('button[data-l]'); if (x) setLang(x.getAttribute('data-l')); });
