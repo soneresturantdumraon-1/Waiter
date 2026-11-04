@@ -688,12 +688,23 @@ window.SONE_CONFIG = {
     if (S._busy && Date.now() - S._busyAt < 25000) return; S._busy = true; S._busyAt = Date.now();
     try { await S._refresh1(); } catch (e) { S.refreshFail(e); } finally { S._busy = false; }
   };
+  /* Waiter sirf apna order dekhe: dusre waiter ke orders hide. Owner ko sab dikhta hai. */
+  S.mineOnly = function (list) {
+    const me = S.me; if (!me || me.role === 'owner') return list;
+    const mine = o => [o.taken_by, o.handled_by, o.accepted_by, o.delivery_by].some(v => v != null && String(v) === String(me.id))
+      || [o.taken_by_name, o.accepted_by_name, o.delivery_by_name].some(v => v && String(v).trim().toLowerCase() === String(me.name || '').trim().toLowerCase());
+    return list.filter(o => {
+      if (o.source === 'waiter') return mine(o);           // table order: sirf jisne liya wahi dekhe
+      if (o.status === 'placed') return true;               // naya online order: abhi kisi ka nahi, sabko dikhe taaki koi accept kar sake
+      return mine(o);                                       // accept hone ke baad sirf accept karne wale ko
+    });
+  };
   S._refresh1 = async function () {
     const from = S.fromDate || new Date(Date.now() - 36 * 3600e3).toISOString();
     const { data, error } = await Promise.race([sb.from('orders').select('*').gte('created_at', from).order('created_at', { ascending: false }).limit(500), new Promise(r => setTimeout(() => r({ error: { message: 'timeout' } }), 20000))]);
     if (error) { S.refreshFail(error); return; }
     S.okAt = Date.now(); S.failN = 0;
-    S.orders = data || [];
+    S.orders = S.mineOnly(data || []);
     const fresh = [];
     if (S.seen) S.orders.forEach(o => { if (!S.seen.has(o.id) && o.status === 'placed' && o.source === 'customer') fresh.push(o); });
     S.seen = new Set(S.orders.map(o => o.id));
