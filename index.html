@@ -1276,6 +1276,8 @@ window.SONE_CONFIG = {
       if (hd) { const d = drafts.find(z => String(z.id) === hd.dataset.hd); if (d && await confirmBox('यह रोका हुआ बिल हटाएं?', 'हटाएं', true)) { drafts = drafts.filter(z => z !== d); saveDrafts(); draw(); } }
       if (e.target.closest('#pa-clear') && await confirmBox('पूरा बिल साफ़ करें?', 'साफ़ करें', true)) { resetCur(); draw(); }
     };
+    /* FIX: KOT button #pos-bill me hai (#pos-results ke bahar), isliye uska click alag se sunna zaroori hai */
+    $('#pos-bill').onclick = e => { const b = e.target.closest('#pa-send'); if (b && !b.disabled) send(b); };
   }
 
   function draw() {
