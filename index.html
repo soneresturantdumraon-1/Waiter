@@ -1078,31 +1078,54 @@ window.SONE_CONFIG = {
     await S.ensureNames();
     const { data, error } = await sb.from('orders').select('*').gte('created_at', startOfDay(fromStr).toISOString()).lt('created_at', new Date(startOfDay(toStr).getTime() + 86400e3).toISOString()).limit(5000);
     if (error) throw error;
-    const m = {}, g = (id, name) => { const k = id || ('n:' + (name || '?')); return m[k] || (m[k] = { name: name || 'Naam nahi mila', tk: 0, tkA: 0, ac: 0, acA: 0, sv: 0, svA: 0, tables: new Set() }); };
+    const m = {}, g = (id, name) => { const k = id || ('n:' + (name || '?')); return m[k] || (m[k] = { name: name || 'Naam nahi mila', tk: 0, tkA: 0, ac: 0, acA: 0, sv: 0, svA: 0, tables: new Set(), list: [] }); };
     (data || []).forEach(o => {
       if (o.status === 'cancelled') return; const amt = Number(o.total) || 0;
-      if (o.source === 'waiter') { const r = g(o.taken_by || o.handled_by, S.takerName(o)); r.tk++; r.tkA += amt; if (o.status === 'completed') { r.sv++; r.svA += amt; r.tables.add(String(o.table_no)); } }
-      else if (o.status !== 'placed') { const r = g(o.accepted_by || o.handled_by, S.acceptorName(o)); r.ac++; r.acA += amt; }
+      if (o.source === 'waiter') { const r = g(o.taken_by || o.handled_by, S.takerName(o)); r.list.push(o); r.tk++; r.tkA += amt; if (o.status === 'completed') { r.sv++; r.svA += amt; r.tables.add(String(o.table_no)); } }
+      else if (o.status !== 'placed') { const r = g(o.accepted_by || o.handled_by, S.acceptorName(o)); r.list.push(o); r.ac++; r.acA += amt; }
     });
-    return Object.values(m).sort((a, b) => (b.tkA + b.acA) - (a.tkA + a.acA));
+    const sum = { n: 0, sales: 0, cash: 0, online: 0, due: 0, cancel: 0 };
+    (data || []).forEach(o => { const t = Number(o.total) || 0; if (o.status === 'cancelled') { sum.cancel++; return; } sum.n++; sum.sales += t;
+      if (o.payment_status === 'paid') { const sp = o.paid_cash != null || o.paid_online != null; sum.cash += sp ? (Number(o.paid_cash) || 0) : (o.payment_method !== 'upi' ? t : 0); sum.online += sp ? (Number(o.paid_online) || 0) : (o.payment_method === 'upi' ? t : 0); } else sum.due += t; });
+    const out = Object.values(m).sort((a, b) => (b.tkA + b.acA) - (a.tkA + a.acA)); out.sum = sum; out.orders = (data || []).filter(o => o.status !== 'cancelled'); return out;
+  };
+  /* order list (card dabane par) -> order dabane par bill receipt */
+  const cashOf = o => o.payment_status !== 'paid' ? 0 : (o.paid_cash != null || o.paid_online != null) ? (Number(o.paid_cash) || 0) : (o.payment_method !== 'upi' ? Number(o.total) || 0 : 0);
+  const onlOf = o => o.payment_status !== 'paid' ? 0 : (o.paid_cash != null || o.paid_online != null) ? (Number(o.paid_online) || 0) : (o.payment_method === 'upi' ? Number(o.total) || 0 : 0);
+  S.perfList = function (title, orders, mode) {
+    const list = orders.slice().sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    const amt = o => mode === 'cash' ? cashOf(o) : mode === 'online' ? onlOf(o) : (Number(o.total) || 0);
+    const tot = list.reduce((a, o) => a + amt(o), 0);
+    const when = o => new Date(o.created_at).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+    const pay = o => { if (o.payment_status !== 'paid') return '<span class="pill orange">Baaki</span>'; const c = cashOf(o), n = onlOf(o); return c && n ? `<span class="pill green">💵 ${money(c)} + 📲 ${money(n)}</span>` : n ? '<span class="pill green">📲 Online</span>' : '<span class="pill green">💵 Cash</span>'; };
+    const sh = sheet(`<div class="sh-head"><h3>${esc(title)}</h3><button class="iconbtn" data-close>✕</button></div>
+      <div class="sh-body"><div class="xs muted" style="text-align:center;margin-bottom:8px"><b>${list.length}</b> order · <b>${money(tot)}</b> — order dabayein to bill receipt khulegi</div>
+      ${list.length ? `<div class="list">${list.map(o => `<button class="li" data-oid="${o.id}" style="width:100%;text-align:left;align-items:flex-start"><div class="grow"><div class="t"><b>#${esc(o.order_no)}</b> · ${o.order_type === 'dine_in' && o.table_no ? 'Table ' + esc(o.table_no) : esc(o.customer_name || '')} <span class="xs muted">· ${when(o)}</span></div><div class="xs muted" style="margin-top:3px;white-space:normal">${(o.items || []).map(i => esc(i.name) + ' ×' + i.qty).join(', ')}</div><div style="margin-top:4px">${pay(o)}</div></div><b>${money(amt(o))}</b></button>`).join('')}</div>` : '<div class="empty"><div class="big">📭</div>Koi order nahi.</div>'}</div>`, { full: true });
+    $$('[data-oid]', sh.el).forEach(b => b.onclick = () => { const o = list.find(x => String(x.id) === b.dataset.oid); if (o && window.orderBill) window.orderBill({ ...o, _group: [o] }); });
   };
   S.perfView = function () {
     const today = dayStr(), back = n => dayStr(new Date(Date.now() - n * 86400e3));
-    const RANGES = [['Aaj', today, today], ['Kal', back(1), back(1)], ['7 din', back(6), today], ['30 din', back(29), today]]; let ri = 0;
-    const sh = sheet(`<div class="sh-head"><h3>Staff ka hisaab</h3><button class="iconbtn" data-close>✕</button></div>
+    const RANGES = [['Aaj', today, today], ['Kal', back(1), back(1)], ['7 din', back(6), today], ['30 din', back(29), today]]; let ri = 0, cf = today, ct = today, cur = []; const fd = x => x.split('-').reverse().join('/');
+    const sh = sheet(`<div class="sh-head"><h3>Report / Hisaab</h3><button class="iconbtn" data-close>✕</button></div>
       <div class="chips" id="pf-ch">${RANGES.map((r, i) => `<button class="chip ${i === 0 ? 'on' : ''}" data-i="${i}">${r[0]}</button>`).join('')}</div>
+      <div class="row gap8" style="padding:0 16px 8px"><label class="field grow" style="margin:0"><span>📅 Se (date)</span><input class="inp" id="pf-f" type="date" max="${today}"></label><label class="field grow" style="margin:0"><span>📅 Tak (date)</span><input class="inp" id="pf-t" type="date" max="${today}"></label></div>
       <div class="sh-body" id="pf-body"><div class="spin"></div></div>`, { full: true });
-    const body = $('#pf-body', sh.el);
+    const body = $('#pf-body', sh.el), fI = $('#pf-f', sh.el), tI = $('#pf-t', sh.el); fI.value = cf; tI.value = ct;
     const load = async () => {
       body.innerHTML = '<div class="spin"></div>';
       try {
-        const rows = await S.perfData(RANGES[ri][1], RANGES[ri][2]);
-        if (!rows.length) { body.innerHTML = '<div class="empty"><div class="big">📊</div>Is period mein koi order nahi mila.</div>'; return; }
+        const rows = await S.perfData(cf, ct); cur = rows; const sm = rows.sum || { n: 0, sales: 0, cash: 0, online: 0, due: 0, cancel: 0 };
+        if (!rows.length && !sm.n) { body.innerHTML = '<div class="empty"><div class="big">📊</div>Is period mein koi order nahi mila.</div>'; return; }
         const T = rows.reduce((a, r) => ({ tk: a.tk + r.tk, tkA: a.tkA + r.tkA, ac: a.ac + r.ac, acA: a.acA + r.acA }), { tk: 0, tkA: 0, ac: 0, acA: 0 });
         const cols = ['#5B6CE0', '#34C759', '#FF9500', '#AF52DE', '#007AFF', '#FF2D55'];
-        body.innerHTML = `<div class="tiles"><div class="tile"><div class="l">Table orders liye</div><div class="v">${T.tk}</div><div class="xs muted">${money(T.tkA)}</div></div>
-          <div class="tile"><div class="l">Online accept kiye</div><div class="v">${T.ac}</div><div class="xs muted">${money(T.acA)}</div></div></div>` +
-          rows.map((r, i) => `<div class="card mt12"><div class="row" style="gap:12px"><div class="av" style="background:${cols[i % cols.length]}">${esc((r.name || '?').trim().charAt(0).toUpperCase())}</div><div class="grow"><div class="bold" style="font-size:17px">${esc(r.name)}</div></div><b>${money(r.tkA + r.acA)}</b></div>
+        body.innerHTML = `<div class="xs muted" style="text-align:center;margin-bottom:6px">📅 ${cf === ct ? fd(cf) : fd(cf) + ' → ' + fd(ct)}</div>
+          <div class="tiles"><div class="tile" data-k="all" style="cursor:pointer"><div class="l">💰 Kul bikri</div><div class="v">${money(sm.sales)}</div><div class="xs muted">${sm.n} order</div></div>
+          <div class="tile" data-k="cash" style="cursor:pointer"><div class="l">💵 Cash mila</div><div class="v">${money(sm.cash)}</div></div>
+          <div class="tile" data-k="online" style="cursor:pointer"><div class="l">📲 Online mila</div><div class="v">${money(sm.online)}</div></div>
+          <div class="tile" data-k="due" style="cursor:pointer"><div class="l">⏳ Payment baaki</div><div class="v">${money(sm.due)}</div></div></div>
+          <div class="tiles" style="margin-top:12px"><div class="tile" data-k="tk" style="cursor:pointer"><div class="l">Table orders liye</div><div class="v">${T.tk}</div><div class="xs muted">${money(T.tkA)}</div></div>
+          <div class="tile" data-k="ac" style="cursor:pointer"><div class="l">Online accept kiye</div><div class="v">${T.ac}</div><div class="xs muted">${money(T.acA)}</div></div></div>` +
+          rows.map((r, i) => `<div class="card mt12" data-sk="${i}" style="cursor:pointer"><div class="row" style="gap:12px"><div class="av" style="background:${cols[i % cols.length]}">${esc((r.name || '?').trim().charAt(0).toUpperCase())}</div><div class="grow"><div class="bold" style="font-size:17px">${esc(r.name)}</div></div><b>${money(r.tkA + r.acA)}</b></div>
             <div class="list" style="margin:12px 0 0;background:var(--card2)">
               <div class="li"><span class="grow t">🍽️ Table orders liye</span><span><b>${r.tk}</b> · ${money(r.tkA)}</span></div>
               <div class="li"><span class="grow t">🛵 Online orders accept kiye</span><span><b>${r.ac}</b> · ${money(r.acA)}</span></div>
@@ -1110,7 +1133,16 @@ window.SONE_CONFIG = {
           '<p class="xs muted" style="text-align:center;padding:14px 24px">Cancelled/reject orders count nahi hote.</p>';
       } catch (e) { body.innerHTML = '<div class="empty">Hisaab load nahi hua: ' + esc(e.message || e) + '</div>'; }
     };
-    $('#pf-ch', sh.el).onclick = e => { const b = e.target.closest('[data-i]'); if (!b) return; ri = +b.dataset.i; $$('#pf-ch .chip', sh.el).forEach(x => x.classList.toggle('on', x === b)); load(); };
+    $('#pf-ch', sh.el).onclick = e => { const b = e.target.closest('[data-i]'); if (!b) return; ri = +b.dataset.i; cf = RANGES[ri][1]; ct = RANGES[ri][2]; fI.value = cf; tI.value = ct; $$('#pf-ch .chip', sh.el).forEach(x => x.classList.toggle('on', x === b)); load(); };
+    const onDate = () => { let a = fI.value || cf, z = tI.value || a; if (a > z) { const t = a; a = z; z = t; } cf = a; ct = z; fI.value = cf; tI.value = ct; $$('#pf-ch .chip', sh.el).forEach(x => x.classList.remove('on')); load(); };
+    fI.onchange = onDate; tI.onchange = onDate;
+    body.onclick = e => {
+      const k = e.target.closest('[data-k]'), c = e.target.closest('[data-sk]'), all = cur.orders || [], rg = cf === ct ? fd(cf) : fd(cf) + ' → ' + fd(ct);
+      if (k) { const m = k.dataset.k; const f = { all: () => true, cash: o => cashOf(o) > 0, online: o => onlOf(o) > 0, due: o => o.payment_status !== 'paid', tk: o => o.source === 'waiter', ac: o => o.source !== 'waiter' && o.status !== 'placed' }[m];
+        const t = { all: '💰 Saare orders', cash: '💵 Cash wale orders', online: '📲 Online wale orders', due: '⏳ Payment baaki', tk: 'Table orders', ac: 'Online accept kiye' }[m];
+        return S.perfList(t + ' · ' + rg, all.filter(f), m); }
+      if (c) { const r = cur[+c.dataset.sk]; if (r) S.perfList(r.name + ' · ' + rg, r.list, 'all'); }
+    };
     load();
   };
 
@@ -1569,7 +1601,7 @@ window.billSizeSheet=function(){
     const paid = o.payment_status === 'paid', ph = String(o.phone || '').replace(/\D/g, '').slice(-10);
     const wn = String((window.WSET || {}).bill_waiter_name) !== 'false' && o.source === 'waiter' && window.Staff && Staff.takerName ? Staff.takerName(o) : '';
     billView({ bill_no: o.order_no, customer_name: /^Table\s/i.test(o.customer_name || '') ? '' : o.customer_name, _waiter: wn, table_no: o.order_type === 'dine_in' ? o.table_no : '', created_at: o.created_at, items, subtotal: sub, discount: Math.max(0, sub - total),
-      cash: paid && o.payment_method !== 'upi' ? total : 0, online: paid && o.payment_method === 'upi' ? total : 0, udhaar: 0, _phone: ph.length === 10 ? ph : '', _order: o, _orders: o._group || [o], _due: !paid });
+      cash: paid ? (((o._group || [o]).some(x => x.paid_cash != null || x.paid_online != null)) ? (o._group || [o]).reduce((a, x) => a + (Number(x.paid_cash) || 0), 0) : (o.payment_method !== 'upi' ? total : 0)) : 0, online: paid ? (((o._group || [o]).some(x => x.paid_cash != null || x.paid_online != null)) ? (o._group || [o]).reduce((a, x) => a + (Number(x.paid_online) || 0), 0) : (o.payment_method === 'upi' ? total : 0)) : 0, udhaar: 0, _phone: ph.length === 10 ? ph : '', _order: o, _orders: o._group || [o], _due: !paid });
   };
 
   function receipt(b) {
@@ -1638,12 +1670,41 @@ window.billSizeSheet=function(){
     const sh = sheet(`<div class="sh-head"><h3>${b._due ? tt('Bill (payment baaki)') : 'Bill #' + b.bill_no}</h3><button class="iconbtn" data-close>✕</button></div>
       <div class="sh-body"><div style="background:#fff;border-radius:12px;margin:0 16px;overflow:auto;box-shadow:var(--shadow)">${receipt(b)}</div>
       <div class="card mt12"><label class="field" style="margin:0"><span>Customer ka WhatsApp number (optional)</span><input class="inp" id="bv-ph" type="tel" inputmode="numeric" maxlength="10" placeholder="10 digit mobile" value="${esc(b._phone || '')}"></label></div></div>
-      <div class="sh-foot">${b._order && b._order.payment_status !== 'paid' ? '<div class="row gap8 mb8"><button class="btn green grow" id="bv-cash">💵 Cash mila ✓</button><button class="btn blue grow" id="bv-upi">📲 UPI mila ✓</button></div>' : ''}<button class="btn blue block mb8" id="bv-show">📱 Customer ko dikhayein</button><div class="row gap8"><button class="btn green grow" id="bv-wa">📷 WhatsApp (photo)</button><button class="btn sec grow" id="bv-pr">🖨 Print / PDF</button></div><button class="btn sec sm block mt8" id="bv-tx">Sirf text mein bhejein</button></div>`, { full: true });
+      <div class="sh-foot">${b._order && b._order.payment_status !== 'paid' ? '<div class="row gap8 mb8"><button class="btn green grow" id="bv-cash">💵 Cash mila ✓</button><button class="btn blue grow" id="bv-upi">📲 UPI mila ✓</button></div><button class="btn sec block mb8" id="bv-split">💵 + 📲 Cash + Online alag-alag</button><div class="card mb8" id="bv-splitbox" style="display:none"><div class="bold mb8">Kitna Cash, kitna Online mila?</div><div class="row gap8"><label class="field grow" style="margin:0"><span>💵 Cash (₹)</span><input class="inp" id="bv-sc" type="number" inputmode="decimal" placeholder="0"></label><label class="field grow" style="margin:0"><span>📲 Online (₹)</span><input class="inp" id="bv-so" type="number" inputmode="decimal" placeholder="0"></label></div><div class="xs muted mt8" id="bv-sinfo"></div><button class="btn green block mt8" id="bv-ssave">✓ Save karein</button></div>' : ''}<button class="btn blue block mb8" id="bv-show">📱 Customer ko dikhayein</button><div class="row gap8"><button class="btn green grow" id="bv-wa">📷 WhatsApp (photo)</button><button class="btn sec grow" id="bv-pr">🖨 Print / PDF</button></div><button class="btn sec sm block mt8" id="bv-tx">Sirf text mein bhejein</button></div>`, { full: true });
     const ph = () => $('#bv-ph', sh.el).value.replace(/\D/g, '').slice(-10);
     $('#bv-pr', sh.el).onclick = () => Staff.printHTML(receipt(b));
     $('#bv-show', sh.el).onclick = () => showCustomer(b);
     { const payNow = async m => { const o = b._order; for (const x of (b._orders || [o])) await Staff.update(x, { payment_status: 'paid', payment_method: m }); toast(tt('Payment mil gayi. Bill paid ho gaya ✓'), 'ok'); sh.close(); window.orderBill(o); };
       const bc = $('#bv-cash', sh.el); if (bc) { bc.onclick = () => payNow('counter'); $('#bv-upi', sh.el).onclick = () => payNow('upi'); } }
+    { const sb_ = $('#bv-split', sh.el); if (sb_) {
+      const tot = Math.max(0, Number(b.subtotal) - (Number(b.discount) || 0)), r2 = v => Math.round(v * 100) / 100;
+      const ic = $('#bv-sc', sh.el), io = $('#bv-so', sh.el), info = $('#bv-sinfo', sh.el);
+      const upd = () => { const c = parseFloat(ic.value) || 0, o2 = parseFloat(io.value) || 0, d = r2(tot - c - o2); info.innerHTML = 'Kul bill: <b>' + money(tot) + '</b> · ' + (d === 0 ? '<span style="color:var(--green)">✓ barabar</span>' : d > 0 ? '<span style="color:var(--red)">₹' + d + ' kam hai</span>' : '<span style="color:var(--red)">₹' + (-d) + ' zyada hai</span>'); };
+      sb_.onclick = () => { const bx = $('#bv-splitbox', sh.el); bx.style.display = bx.style.display === 'none' ? '' : 'none'; upd(); };
+      ic.oninput = () => { const c = parseFloat(ic.value); io.value = isNaN(c) ? '' : String(Math.max(0, r2(tot - c))); upd(); };
+      io.oninput = () => { const v = parseFloat(io.value); ic.value = isNaN(v) ? '' : String(Math.max(0, r2(tot - v))); upd(); };
+      $('#bv-ssave', sh.el).onclick = async e => {
+        const btn = e.currentTarget, c = r2(parseFloat(ic.value) || 0), on = r2(parseFloat(io.value) || 0);
+        if (c < 0 || on < 0) return toast('Amount galat hai', 'err');
+        if (r2(c + on) !== r2(tot)) return toast('Cash + Online ka jod ' + money(tot) + ' hona chahiye', 'err');
+        btn.disabled = true;
+        try {
+          const o = b._order; let left = c, warn = false;
+          for (const x of (b._orders || [o])) {
+            const t = Number(x.total) || 0, cx = Math.min(left, t), ox = r2(t - cx); left = r2(left - cx);
+            const patch = { payment_status: 'paid', payment_method: cx > 0 ? 'counter' : 'upi', paid_cash: cx, paid_online: ox };
+            let r = await sb.from('orders').update(patch).eq('id', x.id);
+            if (r.error && /paid_cash|paid_online|column|schema/i.test(r.error.message)) {
+              const p2 = { payment_status: 'paid', payment_method: patch.payment_method, note: (x.note ? x.note + ' | ' : '') + 'Cash ₹' + cx + ' + Online ₹' + ox };
+              r = await sb.from('orders').update(p2).eq('id', x.id); if (!r.error) { Object.assign(x, p2); warn = true; }
+            } else if (!r.error) Object.assign(x, patch);
+            if (r.error) return toast('Save nahi hua: ' + r.error.message, 'err');
+          }
+          try { await Staff.refresh(); } catch (e2) {}
+          toast(warn ? 'Payment save ho gayi (split note me likha). Poora split dikhane ke liye SQL chalayein.' : 'Cash + Online save ho gaya ✓', 'ok'); sh.close(); window.orderBill(o);
+        } finally { btn.disabled = false; }
+      };
+    } }
     $('#bv-wa', sh.el).onclick = async e => { const t = e.currentTarget; t.disabled = true; try { if (ph().length === 10 && window.touchCustomer) touchCustomer(ph(), b.customer_name, 0, false); await sendPhoto(b, ph().length === 10 ? ph() : ''); } finally { t.disabled = false; } };
     $('#bv-tx', sh.el).onclick = () => { const n = ph(); if (n.length !== 10) return toast('10 digit mobile number likhein', 'err'); window.touchCustomer && touchCustomer(n, b.customer_name, 0, false); window.open('https://wa.me/91' + n + '?text=' + encodeURIComponent(billText(b)), '_blank'); };
   }
