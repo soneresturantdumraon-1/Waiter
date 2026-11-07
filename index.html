@@ -1147,10 +1147,17 @@ window.SONE_CONFIG = {
   };
 
   /* ---------- waiter takes a table order ---------- */
-  S.loadMenu = async function () {
-    if (S.menu.length) return S.menu;
-    const { data } = await sb.from('menu_items').select('*').eq('available', true).order('sort');
-    S.menu = data || []; return S.menu;
+  S.loadMenu = async function (force) {
+    if (!force && S.menu.length && Date.now() - (S.menuAt || 0) < 60000) return S.menu;   /* menu 60 sec se purana ho to dobara laayein */
+    try {
+      const { data, error } = await sb.from('menu_items').select('*').eq('available', true).order('sort');
+      if (error) throw error;
+      S.menu = data || []; S.menuAt = Date.now(); S.menuErr = null;
+    } catch (e) {
+      S.menuErr = (e && e.message) || 'error';
+      if (!S.menuWarn || Date.now() - S.menuWarn > 60000) { S.menuWarn = Date.now(); toast('Menu load nahi hua: ' + S.menuErr, 'err'); }
+    }
+    return S.menu;
   };
   S.takeOrder = async function () {
     await S.loadMenu();
@@ -1253,11 +1260,69 @@ window.SONE_CONFIG = {
   const hiddenVariant = m => /\(Half\)\s*$/i.test(m.name) && !!fullOf(baseName(m.name));
   const inMenu = n => MENU.some(m => m.name === n) || /\(Half\)\s*$/i.test(n);
   const saveDrafts = () => { if (dKey) window.ls.set(dKey, drafts); };
+  /* ---- rokay hue bill sabhi waiter mobile par (Supabase table pos_drafts, id 'w:...') ---- */
+  let dOK = true, dPend = 0, dWarned = false, synced = false, dT;
+  const dFail = () => { dOK = false; if (!dWarned) { dWarned = true; toast('Rokay hue bill abhi sirf is phone par hain. Sab phone ke liye sync-live.sql Supabase me chalayein.', 'err'); } };
+  const dPut = async d => { if (!dOK) return; dPend++; try { const { error } = await sb.from('pos_drafts').upsert({ id: 'w:' + d.id, data: d, updated_at: new Date().toISOString() }); if (error) dFail(); } catch (e) { dFail(); } finally { dPend--; } };
+  const dDel = async id => { if (!dOK) return; dPend++; try { const { error } = await sb.from('pos_drafts').delete().eq('id', 'w:' + id); if (error) dFail(); } catch (e) { dFail(); } finally { dPend--; } };
+  const dPull = async () => { if (!dOK || dPend > 0 || !dKey) return; try { const { data, error } = await sb.from('pos_drafts').select('*').like('id', 'w:%').order('updated_at'); if (error) return dFail(); if (dPend > 0) return;
+    drafts = (data || []).map(r => r.data).filter(d => d && Array.isArray(d.bill) && d.bill.length); saveDrafts(); if ($('#v-pos').classList.contains('active') && $('#pa-name')) draw(); } catch (e) { dFail(); } };
+  const dDeb = () => { clearTimeout(dT); dT = setTimeout(dPull, 300); };
+  const reMenu = async () => { S.menuAt = 0; await S.loadMenu(true); MENU = S.menu.slice(); const n = $('#pa-name'); if (n && n.value && $('#v-pos').classList.contains('active')) n.oninput(); };
+  function startSync() {
+    if (synced) return; synced = true;
+    const mk = () => { try { if (startSync.ch) sb.removeChannel(startSync.ch); } catch (e) {}
+      startSync.ch = sb.channel('waiter-pos-live').on('postgres_changes', { event: '*', schema: 'public', table: 'pos_drafts' }, dDeb).on('postgres_changes', { event: '*', schema: 'public', table: 'menu_items' }, () => { clearTimeout(startSync.mt); startSync.mt = setTimeout(reMenu, 600); })
+        .subscribe(st => { if (st === 'CHANNEL_ERROR' || st === 'TIMED_OUT' || st === 'CLOSED') setTimeout(mk, 8000); }); };
+    mk(); setInterval(() => { if (!document.hidden) dPull(); }, 20000);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) { dPull(); if ($('#v-pos').classList.contains('active')) reMenu(); } });
+    window.addEventListener('online', () => { dPull(); mk(); });
+  }
+  const oldLive = S.startLive; S.startLive = function () { const r = oldLive.apply(this, arguments); try { if (S.me) { dKey = dKey || 'sone_wdrafts_' + S.me.id; dPull(); startSync(); } } catch (e) {} return r; };
   const syncCtx = () => { const t = $('#pw-table'), n = $('#pw-name'), o = $('#pw-note'); if (t) ctx = { table: t.value, name: n.value, note: o.value }; };
   const pushCtx = () => { const t = $('#pw-table'); if (t) { t.value = ctx.table; $('#pw-name').value = ctx.name; $('#pw-note').value = ctx.note; } };
   const resetCur = () => { bill = []; ctx = { table: '', name: '', note: '' }; pushCtx(); };
-  const dLabel = (d, i) => { const t = d.ctx && d.ctx.table && d.ctx.table.trim(), n = d.ctx && d.ctx.name && d.ctx.name.trim(); return t ? `<span>टेबल</span> ${esc(t)}` : n ? esc(n) : `<span>बिल</span> ${i + 1}`; };
-  function holdCur() { syncCtx(); if (!bill.length) return false; drafts.push({ id: Date.now() + Math.random(), bill, ctx: { ...ctx } }); saveDrafts(); resetCur(); return true; }
+  const dLabel0 = (d, i) => { const t = d.ctx && d.ctx.table && d.ctx.table.trim(), n = d.ctx && d.ctx.name && d.ctx.name.trim(); return t ? `<span>टेबल</span> ${esc(t)}` : n ? esc(n) : `<span>बिल</span> ${i + 1}`; };
+  const dLabel = (d, i) => dLabel0(d, i) + (d.by && S.me && d.by !== S.me.name ? ` <span class="xs muted">\u00b7 ${esc(d.by)}</span>` : '');
+  function holdCur() { syncCtx(); if (!bill.length) return false; const nd = { id: Date.now() + Math.random(), bill, ctx: { ...ctx }, by: S.me ? S.me.name : '' }; drafts.push(nd); saveDrafts(); dPut(nd); resetCur(); return true; }
+
+  /* ---------- smart item search: spelling/space/word-order ki galti chalegi, category se bhi milega ---------- */
+  const norm = t => String(t || '').toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
+  const skel = t => t.replace(/ph/g, 'f').replace(/w/g, 'v').replace(/y/g, 'i').replace(/(.)\1+/g, '$1').replace(/[aeiou]/g, '');
+  const lev = (a, b) => { if (Math.abs(a.length - b.length) > 1) return 9; const m = []; for (let i = 0; i <= a.length; i++) { m[i] = [i]; } for (let j = 1; j <= b.length; j++) m[0][j] = j;
+    for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++) m[i][j] = Math.min(m[i - 1][j] + 1, m[i][j - 1] + 1, m[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)); return m[a.length][b.length]; };
+  function findMenu(q, all) {
+    const n = norm(q); if (!n) return []; const toks = n.split(' '), sq = n.replace(/\s/g, '');
+    const sc = m => { const nm = norm(m.name), nsq = nm.replace(/\s/g, ''), cat = norm(m.category), words = nm.split(' ');
+      if (nm === n) return 100; if (nm.startsWith(n)) return 90; if (toks.every(t => nm.includes(t))) return 80; if (nsq.includes(sq)) return 70;
+      if (toks.every(t => nm.includes(t) || cat.includes(t))) return 60;
+      if (toks.every(t => words.some(w => w.startsWith(t) || (t.length >= 4 && lev(w.slice(0, t.length + 1), t) <= 1) || (t.length >= 4 && lev(w, t) <= 1)))) return 40;
+      if (toks.every(t => { const k = skel(t); return k.length >= 2 && t.length >= 3 && words.some(w => skel(w) === k); })) return 30;   /* panir = paneer, dalfry = dal fry */
+      return 0; };
+    return MENU.filter(m => all || !hiddenVariant(m)).map(m => [sc(m), m]).filter(x => x[0] > 0).sort((a, b) => b[0] - a[0]).slice(0, 12).map(x => x[1]);
+  }
+  function menuPick() {
+    let q = '', cat = '';
+    const cats = [...new Set(MENU.map(m => m.category).filter(Boolean))];
+    const sh = sheet(`<div class="sh-head"><h3><span>\u{1F4CB} \u092e\u0947\u0928\u094d\u092f\u0942 \u0938\u0947 \u091a\u0941\u0928\u0947\u0902</span></h3><button class="iconbtn" data-close>\u2715</button></div>
+      <div class="pad" style="padding-top:0"><div class="search">${ICON.search}<input id="mp-q" placeholder="\u0906\u0907\u091f\u092e \u0916\u094b\u091c\u0947\u0902"></div><div id="mp-c" class="row gap8" style="overflow-x:auto;padding:8px 0 0"></div></div>
+      <div class="sh-body" id="mp-l"></div><div class="sh-foot"><button class="btn block" id="mp-done">\u0939\u094b \u0917\u092f\u093e</button></div>`, { full: true, onClose: () => draw() });
+    const list = $('#mp-l', sh.el), cbar = $('#mp-c', sh.el);
+    const qtyOf = m => { const l = bill.find(x => x.name === m.name && Number(x.price) === Number(m.price)); return l ? l.qty : 0; };
+    const bar = () => { cbar.innerHTML = ['', ...cats].map(c => `<button class="btn ${c === cat ? '' : 'sec'} sm" data-c="${esc(c)}" style="white-space:nowrap;flex:none">${c ? esc(c) : '\u0938\u092d\u0940'}</button>`).join(''); };
+    function render() {
+      const l = (q ? findMenu(q, true) : MENU.filter(m => !cat || m.category === cat)).filter(m => !cat || m.category === cat).slice(0, 120);
+      list.innerHTML = `<div class="list">${l.map(m => { const n = qtyOf(m); return `<div class="li"><div class="grow"><div class="t">${esc(m.name)}</div><div class="s">${money(m.price)}${m.category ? ' \u00b7 ' + esc(m.category) : ''}</div></div>
+        <div class="row gap8">${n ? `<button class="iconbtn" data-d="${m.id}">\u2212</button><b>${n}</b>` : ''}<button class="iconbtn" data-a="${m.id}" style="background:var(--brand);color:#fff">+</button></div></div>`; }).join('') || '<div class="empty">\u0915\u0941\u091b \u0928\u0939\u0940\u0902 \u092e\u093f\u0932\u093e</div>'}</div>`; }
+    list.onclick = e => { const a = e.target.closest('[data-a]'), d = e.target.closest('[data-d]'); if (!a && !d) return;
+      const m = MENU.find(z => z.id == (a || d).dataset[a ? 'a' : 'd']); if (!m) return; const key = m.name + '|' + Number(m.price), ln = bill.find(x => x.key === key || (x.name === m.name && Number(x.price) === Number(m.price)));
+      if (a) { if (ln) ln.qty++; else bill.push({ key, name: m.name, price: Number(m.price), qty: 1 }); } else if (ln) { ln.qty--; if (ln.qty <= 0) bill.splice(bill.indexOf(ln), 1); }
+      haptic(8); const y = list.scrollTop; render(); list.scrollTop = y; };
+    cbar.onclick = e => { const b = e.target.closest('[data-c]'); if (!b) return; cat = b.dataset.c; bar(); render(); };
+    $('#mp-q', sh.el).oninput = e => { q = e.target.value; render(); };
+    $('#mp-done', sh.el).onclick = () => { sh.close(); };
+    bar(); render();
+  }
 
   function build() {
     $('#pos-results').innerHTML = `<div id="pw-held"></div>
@@ -1269,15 +1334,17 @@ window.SONE_CONFIG = {
         <label class="field"><span>आइटम का नाम (खोजें)</span><input class="inp" id="pa-name" autocomplete="off" placeholder="जैसे: पनीर, रोटी, पानी…"></label><div id="pa-sug"></div>
         <label class="field"><span>फुल कीमत (₹)</span><input class="inp" id="pa-price" type="number" inputmode="decimal"></label>
         <label class="field"><span>मात्रा — नंबर लिखें · आधा के लिए H · फुल+हाफ के लिए FH</span><input class="inp" id="pa-qty" value="1" inputmode="text" autocapitalize="characters" autocomplete="off"></label>
-        <button class="btn block" id="pa-add">＋ बिल में जोड़ें</button></div>
+        <button class="btn block" id="pa-add">＋ बिल में जोड़ें</button><button class="btn sec block" id="pa-menu" style="margin-top:8px">\u{1F4CB} \u092e\u0947\u0928\u094d\u092f\u0942 \u0938\u0947 \u091a\u0941\u0928\u0947\u0902</button></div>
       <div class="card"><div class="bold" style="font-size:16px;margin-bottom:8px">मौजूदा बिल</div><div id="pa-bill"></div></div><div style="height:20px"></div>`;
     ['#pw-table', '#pw-name', '#pw-note'].forEach(id => $(id).oninput = syncCtx);
     const nm = $('#pa-name'), pr = $('#pa-price');
     nm.oninput = () => {
       const q = nm.value.trim().toLowerCase(), ex = q && MENU.find(m => !hiddenVariant(m) && m.name.toLowerCase() === q);
       if (ex) { pr.value = ex.price; pr.readOnly = true; } else { const bn = q && fullOf(baseName(nm.value.trim())); if (bn) { pr.value = bn.price; pr.readOnly = true; } else pr.readOnly = false; }
-      const l = q ? MENU.filter(m => !hiddenVariant(m) && m.name.toLowerCase().includes(q)).slice(0, 8) : [];
-      $('#pa-sug').innerHTML = l.length && !ex ? `<div class="list" style="margin:0 0 10px">${l.map(m => `<button class="li" data-s="${m.id}" style="width:100%;text-align:left"><span class="grow t">${esc(m.name)}</span><span class="muted">${money(m.price)}</span></button>`).join('')}</div>` : '';
+      const l = q ? findMenu(nm.value) : [];
+      $('#pa-sug').innerHTML = !q || ex ? '' : !MENU.length ? `<div class="card small" style="margin:0 0 10px;color:var(--red)">\u092e\u0947\u0928\u094d\u092f\u0942 \u0932\u094b\u0921 \u0928\u0939\u0940\u0902 \u0939\u0941\u0906${S.menuErr ? ' (' + esc(S.menuErr) + ')' : ''} <button class="btn sm mt8" data-mr="1">\u0926\u094b\u092c\u093e\u0930\u093e \u0932\u094b\u0921 \u0915\u0930\u0947\u0902</button></div>`
+        : l.length ? `<div class="list" style="margin:0 0 10px">${l.map(m => `<button class="li" data-s="${m.id}" style="width:100%;text-align:left"><span class="grow t">${esc(m.name)}</span><span class="muted">${money(m.price)}</span></button>`).join('')}</div>`
+        : `<div class="card small muted" style="margin:0 0 10px">\u0915\u094b\u0908 \u0906\u0907\u091f\u092e \u0928\u0939\u0940\u0902 \u092e\u093f\u0932\u093e\u0964 \u0928\u093e\u092e \u0914\u0930 \u0915\u0940\u092e\u0924 \u0916\u0941\u0926 \u0932\u093f\u0916\u0947\u0902 \u092f\u093e \u0928\u0940\u091a\u0947 \u2018\u092e\u0947\u0928\u094d\u092f\u0942 \u0938\u0947 \u091a\u0941\u0928\u0947\u0902\u2019 \u0926\u092c\u093e\u090f\u0902\u0964</div>`;
     };
     const add = () => {
       const name = nm.value.trim(); let price = parseFloat(pr.value); const m = $('#pa-qty').value.trim().toUpperCase().replace(/\s+/g, '').match(/^(\d*)(FH|H)?$/);
@@ -1301,11 +1368,13 @@ window.SONE_CONFIG = {
       if (pl) { bill[pl.dataset.bp].qty++; draw(); }
       if (x) { bill.splice(x.dataset.bx, 1); draw(); }
       if (be) editLine(+be.dataset.be, draw);
+      if (e.target.closest('#pa-menu')) { if (!MENU.length) { await S.loadMenu(true); MENU = S.menu.slice(); } return menuPick(); }
+      if (e.target.closest('[data-mr]')) { await S.loadMenu(true); MENU = S.menu.slice(); nm.oninput(); return; }
       if (e.target.closest('#pa-send')) send(e.target.closest('#pa-send'));
       if (e.target.closest('#pa-hold')) { if (holdCur()) { toast('बिल रोक दिया गया। अब नया बिल बना सकते हैं ✓', 'ok'); draw(); } }
       const hr = e.target.closest('[data-hr]'), hd = e.target.closest('[data-hd]');
-      if (hr) { const d = drafts.find(z => String(z.id) === hr.dataset.hr); if (d) { drafts = drafts.filter(z => z !== d); holdCur(); bill = d.bill; ctx = d.ctx || { table: '', name: '', note: '' }; pushCtx(); saveDrafts(); draw(); haptic(8); toast('रोका हुआ बिल खुल गया ✓', 'ok'); } }
-      if (hd) { const d = drafts.find(z => String(z.id) === hd.dataset.hd); if (d && await confirmBox('यह रोका हुआ बिल हटाएं?', 'हटाएं', true)) { drafts = drafts.filter(z => z !== d); saveDrafts(); draw(); } }
+      if (hr) { const d = drafts.find(z => String(z.id) === hr.dataset.hr); if (d) { drafts = drafts.filter(z => z !== d); dDel(d.id); holdCur(); bill = d.bill; ctx = d.ctx || { table: '', name: '', note: '' }; pushCtx(); saveDrafts(); draw(); haptic(8); toast('रोका हुआ बिल खुल गया ✓', 'ok'); } }
+      if (hd) { const d = drafts.find(z => String(z.id) === hd.dataset.hd); if (d && await confirmBox('यह रोका हुआ बिल हटाएं?', 'हटाएं', true)) { drafts = drafts.filter(z => z !== d); saveDrafts(); dDel(d.id); draw(); } }
       if (e.target.closest('#pa-clear') && await confirmBox('पूरा बिल साफ़ करें?', 'साफ़ करें', true)) { resetCur(); draw(); }
     };
     /* FIX: KOT button #pos-bill me hai (#pos-results ke bahar), isliye uska click alag se sunna zaroori hai */
@@ -1368,7 +1437,7 @@ window.SONE_CONFIG = {
     async show() {
       const key = 'sone_wdrafts_' + (S.me ? S.me.id : '');
       if (dKey !== key) { dKey = key; drafts = (window.ls.get(key, []) || []).filter(d => d && Array.isArray(d.bill) && d.bill.length); }
-      MENU = (await S.loadMenu()).slice(); draw(); pushCtx();
+      MENU = (await S.loadMenu(true)).slice(); draw(); pushCtx(); startSync(); dPull();
     }
   };
 })();
@@ -1670,41 +1739,10 @@ window.billSizeSheet=function(){
     const sh = sheet(`<div class="sh-head"><h3>${b._due ? tt('Bill (payment baaki)') : 'Bill #' + b.bill_no}</h3><button class="iconbtn" data-close>✕</button></div>
       <div class="sh-body"><div style="background:#fff;border-radius:12px;margin:0 16px;overflow:auto;box-shadow:var(--shadow)">${receipt(b)}</div>
       <div class="card mt12"><label class="field" style="margin:0"><span>Customer ka WhatsApp number (optional)</span><input class="inp" id="bv-ph" type="tel" inputmode="numeric" maxlength="10" placeholder="10 digit mobile" value="${esc(b._phone || '')}"></label></div></div>
-      <div class="sh-foot">${b._order && b._order.payment_status !== 'paid' ? '<div class="row gap8 mb8"><button class="btn green grow" id="bv-cash">💵 Cash mila ✓</button><button class="btn blue grow" id="bv-upi">📲 UPI mila ✓</button></div><button class="btn sec block mb8" id="bv-split">💵 + 📲 Cash + Online alag-alag</button><div class="card mb8" id="bv-splitbox" style="display:none"><div class="bold mb8">Kitna Cash, kitna Online mila?</div><div class="row gap8"><label class="field grow" style="margin:0"><span>💵 Cash (₹)</span><input class="inp" id="bv-sc" type="number" inputmode="decimal" placeholder="0"></label><label class="field grow" style="margin:0"><span>📲 Online (₹)</span><input class="inp" id="bv-so" type="number" inputmode="decimal" placeholder="0"></label></div><div class="xs muted mt8" id="bv-sinfo"></div><button class="btn green block mt8" id="bv-ssave">✓ Save karein</button></div>' : ''}<button class="btn blue block mb8" id="bv-show">📱 Customer ko dikhayein</button><div class="row gap8"><button class="btn green grow" id="bv-wa">📷 WhatsApp (photo)</button><button class="btn sec grow" id="bv-pr">🖨 Print / PDF</button></div><button class="btn sec sm block mt8" id="bv-tx">Sirf text mein bhejein</button></div>`, { full: true });
+      <div class="sh-foot">${b._order && b._order.payment_status !== 'paid' ? '<div class="card mb8 small" style="color:var(--orange)">⏳ भुगतान बाकी है — Owner ऐप के Orders टैब में लिया जाएगा (कैश / ऑनलाइन / छूट / ज़्यादा पैसे वापसी)</div>' : ''}<button class="btn blue block mb8" id="bv-show">📱 Customer ko dikhayein</button><div class="row gap8"><button class="btn green grow" id="bv-wa">📷 WhatsApp (photo)</button><button class="btn sec grow" id="bv-pr">🖨 Print / PDF</button></div><button class="btn sec sm block mt8" id="bv-tx">Sirf text mein bhejein</button></div>`, { full: true });
     const ph = () => $('#bv-ph', sh.el).value.replace(/\D/g, '').slice(-10);
     $('#bv-pr', sh.el).onclick = () => Staff.printHTML(receipt(b));
     $('#bv-show', sh.el).onclick = () => showCustomer(b);
-    { const payNow = async m => { const o = b._order; for (const x of (b._orders || [o])) await Staff.update(x, { payment_status: 'paid', payment_method: m }); toast(tt('Payment mil gayi. Bill paid ho gaya ✓'), 'ok'); sh.close(); window.orderBill(o); };
-      const bc = $('#bv-cash', sh.el); if (bc) { bc.onclick = () => payNow('counter'); $('#bv-upi', sh.el).onclick = () => payNow('upi'); } }
-    { const sb_ = $('#bv-split', sh.el); if (sb_) {
-      const tot = Math.max(0, Number(b.subtotal) - (Number(b.discount) || 0)), r2 = v => Math.round(v * 100) / 100;
-      const ic = $('#bv-sc', sh.el), io = $('#bv-so', sh.el), info = $('#bv-sinfo', sh.el);
-      const upd = () => { const c = parseFloat(ic.value) || 0, o2 = parseFloat(io.value) || 0, d = r2(tot - c - o2); info.innerHTML = 'Kul bill: <b>' + money(tot) + '</b> · ' + (d === 0 ? '<span style="color:var(--green)">✓ barabar</span>' : d > 0 ? '<span style="color:var(--red)">₹' + d + ' kam hai</span>' : '<span style="color:var(--red)">₹' + (-d) + ' zyada hai</span>'); };
-      sb_.onclick = () => { const bx = $('#bv-splitbox', sh.el); bx.style.display = bx.style.display === 'none' ? '' : 'none'; upd(); };
-      ic.oninput = () => { const c = parseFloat(ic.value); io.value = isNaN(c) ? '' : String(Math.max(0, r2(tot - c))); upd(); };
-      io.oninput = () => { const v = parseFloat(io.value); ic.value = isNaN(v) ? '' : String(Math.max(0, r2(tot - v))); upd(); };
-      $('#bv-ssave', sh.el).onclick = async e => {
-        const btn = e.currentTarget, c = r2(parseFloat(ic.value) || 0), on = r2(parseFloat(io.value) || 0);
-        if (c < 0 || on < 0) return toast('Amount galat hai', 'err');
-        if (r2(c + on) !== r2(tot)) return toast('Cash + Online ka jod ' + money(tot) + ' hona chahiye', 'err');
-        btn.disabled = true;
-        try {
-          const o = b._order; let left = c, warn = false;
-          for (const x of (b._orders || [o])) {
-            const t = Number(x.total) || 0, cx = Math.min(left, t), ox = r2(t - cx); left = r2(left - cx);
-            const patch = { payment_status: 'paid', payment_method: cx > 0 ? 'counter' : 'upi', paid_cash: cx, paid_online: ox };
-            let r = await sb.from('orders').update(patch).eq('id', x.id);
-            if (r.error && /paid_cash|paid_online|column|schema/i.test(r.error.message)) {
-              const p2 = { payment_status: 'paid', payment_method: patch.payment_method, note: (x.note ? x.note + ' | ' : '') + 'Cash ₹' + cx + ' + Online ₹' + ox };
-              r = await sb.from('orders').update(p2).eq('id', x.id); if (!r.error) { Object.assign(x, p2); warn = true; }
-            } else if (!r.error) Object.assign(x, patch);
-            if (r.error) return toast('Save nahi hua: ' + r.error.message, 'err');
-          }
-          try { await Staff.refresh(); } catch (e2) {}
-          toast(warn ? 'Payment save ho gayi (split note me likha). Poora split dikhane ke liye SQL chalayein.' : 'Cash + Online save ho gaya ✓', 'ok'); sh.close(); window.orderBill(o);
-        } finally { btn.disabled = false; }
-      };
-    } }
     $('#bv-wa', sh.el).onclick = async e => { const t = e.currentTarget; t.disabled = true; try { if (ph().length === 10 && window.touchCustomer) touchCustomer(ph(), b.customer_name, 0, false); await sendPhoto(b, ph().length === 10 ? ph() : ''); } finally { t.disabled = false; } };
     $('#bv-tx', sh.el).onclick = () => { const n = ph(); if (n.length !== 10) return toast('10 digit mobile number likhein', 'err'); window.touchCustomer && touchCustomer(n, b.customer_name, 0, false); window.open('https://wa.me/91' + n + '?text=' + encodeURIComponent(billText(b)), '_blank'); };
   }
