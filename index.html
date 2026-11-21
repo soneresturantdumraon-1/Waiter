@@ -1114,12 +1114,17 @@ window.SONE_CONFIG = {
     });
     /* POS bill me jis waiter ka naam chuna gaya, wo bhi uske hisaab me judta hai */
     let posL = [];
-    try { const q = await sb.from('pos_sales').select('id,bill_no,created_at,subtotal,discount,cash,online,udhaar,table_no,customer_name,items,waiter_id,waiter_name').gte('bill_date', fromStr).lte('bill_date', toStr).not('waiter_id', 'is', null).is('deleted_at', null).limit(5000);
-      if (!q.error) posL = (q.data || []).map(b => { const amt = Math.max(0, Number(b.subtotal) - (Number(b.discount) || 0)), r = g(b.waiter_id, S.names[b.waiter_id] || b.waiter_name); r.tk++; r.tkA += amt; r.sv++; r.svA += amt; if (b.table_no) r.tables.add(String(b.table_no));
-        return { id: 'p' + b.id, order_no: 'B' + b.bill_no, order_type: 'dine_in', table_no: b.table_no, customer_name: b.customer_name, total: amt, status: 'completed', source: 'waiter', taken_by: b.waiter_id, items: b.items || [], created_at: b.created_at, payment_status: Number(b.udhaar) > 0 ? 'pending' : 'paid', paid_cash: Number(b.cash) || 0, paid_online: Number(b.online) || 0, _pos: true }; }); } catch (e) {}
+    let posAll = [];
+    try { const cols = 'id,bill_no,created_at,subtotal,discount,cash,online,udhaar,table_no,customer_name,items';
+      let q = await sb.from('pos_sales').select(cols + ',waiter_id,waiter_name').gte('bill_date', fromStr).lte('bill_date', toStr).is('deleted_at', null).limit(5000);
+      if (q.error) q = await sb.from('pos_sales').select(cols).gte('bill_date', fromStr).lte('bill_date', toStr).is('deleted_at', null).limit(5000);   /* waiter column abhi nahi bana to bhi total dikhe */
+      if (!q.error) { posAll = q.data || []; posL = posAll.filter(b => b.waiter_id).map(b => { const amt = Math.max(0, Number(b.subtotal) - (Number(b.discount) || 0)), r = g(b.waiter_id, S.names[b.waiter_id] || b.waiter_name); r.tk++; r.tkA += amt; r.sv++; r.svA += amt; if (b.table_no) r.tables.add(String(b.table_no));
+        return { id: 'p' + b.id, order_no: 'B' + b.bill_no, order_type: 'dine_in', table_no: b.table_no, customer_name: b.customer_name, total: amt, status: 'completed', source: 'waiter', taken_by: b.waiter_id, items: b.items || [], created_at: b.created_at, payment_status: Number(b.udhaar) > 0 ? 'pending' : 'paid', paid_cash: Number(b.cash) || 0, paid_online: Number(b.online) || 0, _pos: true }; }); } } catch (e) {}
     const sum = { n: 0, sales: 0, cash: 0, online: 0, due: 0, cancel: 0 };
     (data || []).forEach(o => { const t = Number(o.total) || 0; if (o.status === 'cancelled') { sum.cancel++; return; } sum.n++; sum.sales += t;
       if (o.payment_status === 'paid') { const sp = o.paid_cash != null || o.paid_online != null; sum.cash += sp ? (Number(o.paid_cash) || 0) : (o.payment_method !== 'upi' ? t : 0); sum.online += sp ? (Number(o.paid_online) || 0) : (o.payment_method === 'upi' ? t : 0); } else sum.due += t; });
+    /* Owner app ke POS (counter) bill bhi kul bikri / cash / online me jodte hain */
+    posAll.forEach(b => { const t = Math.max(0, Number(b.subtotal) - (Number(b.discount) || 0)); sum.n++; sum.sales += t; sum.cash += Number(b.cash) || 0; sum.online += Number(b.online) || 0; sum.due += Math.max(0, Number(b.udhaar) || 0); });
     const out = Object.values(m).sort((a, b) => (b.tkA + b.acA) - (a.tkA + a.acA)); out.sum = sum; out.pos = posL; out.orders = (data || []).filter(o => o.status !== 'cancelled'); return out;
   };
   /* order list (card dabane par) -> order dabane par bill receipt */
