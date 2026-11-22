@@ -277,7 +277,7 @@ body{letter-spacing:-.01em;text-rendering:optimizeLegibility}
       if(toks.every(function(t){return words.some(function(w){return w.startsWith(t)||(t.length>=3&&lev(w.slice(0,t.length+1),t)<=1)||(t.length>=4&&lev(w,t)<=1)})}))return 40;
       if(toks.every(function(t){var k=skel(t);return k.length>=2&&t.length>=3&&words.some(function(w){return skel(w)===k||skel(w).startsWith(k)})}))return 30;
       return 0};
-    var r=items.map(function(m,i){return[sc(m),i,m]}).filter(function(x){return x[0]>0}).sort(function(a,b){return b[0]-a[0]||a[1]-b[1]}).map(function(x){return x[2]});
+    var r=items.map(function(m,i){return[sc(m),i,m]}).filter(function(x){return x[0]>0}).sort(function(a,b){if(b[0]!==a[0])return b[0]-a[0];var bs=function(x){return norm(x.name).replace(/ (full|half)$/,'')},vr=function(x){return /half\)?$/i.test(String(x.name).trim())?1:0},ba=bs(a[2]),bb=bs(b[2]);return ba<bb?-1:ba>bb?1:vr(a[2])-vr(b[2])||a[1]-b[1]}).map(function(x){return x[2]});
     return limit?r.slice(0,limit):r;
   };
 })();
@@ -1450,7 +1450,7 @@ window.SONE_CONFIG = {
     nm.oninput = () => {
       const q = nm.value.trim().toLowerCase(), ex = q && MENU.find(m => !hiddenVariant(m) && m.name.toLowerCase() === q);
       if (ex) { pr.value = ex.price; pr.readOnly = true; } else { const bn = q && fullOf(baseName(nm.value.trim())); if (bn) { pr.value = bn.price; pr.readOnly = true; } else pr.readOnly = false; }
-      const l = q ? findMenu(nm.value) : [];
+      const l = q ? findMenu(nm.value, true) : [];
       $('#pa-sug').innerHTML = !q || ex ? '' : !MENU.length ? `<div class="card small" style="margin:0 0 10px;color:var(--red)">\u092e\u0947\u0928\u094d\u092f\u0942 \u0932\u094b\u0921 \u0928\u0939\u0940\u0902 \u0939\u0941\u0906${S.menuErr ? ' (' + esc(S.menuErr) + ')' : ''} <button class="btn sm mt8" data-mr="1">\u0926\u094b\u092c\u093e\u0930\u093e \u0932\u094b\u0921 \u0915\u0930\u0947\u0902</button></div>`
         : l.length ? `<div class="list" style="margin:0 0 10px">${l.map(m => `<button class="li" data-s="${m.id}" style="width:100%;text-align:left"><span class="grow t">${esc(m.name)}</span><span class="muted">${money(m.price)}</span></button>`).join('')}</div>`
         : `<div class="card small muted" style="margin:0 0 10px">\u0915\u094b\u0908 \u0906\u0907\u091f\u092e \u0928\u0939\u0940\u0902 \u092e\u093f\u0932\u093e\u0964 \u0928\u093e\u092e \u0914\u0930 \u0915\u0940\u092e\u0924 \u0916\u0941\u0926 \u0932\u093f\u0916\u0947\u0902 \u092f\u093e \u0928\u0940\u091a\u0947 \u2018\u092e\u0947\u0928\u094d\u092f\u0942 \u0938\u0947 \u091a\u0941\u0928\u0947\u0902\u2019 \u0926\u092c\u093e\u090f\u0902\u0964</div>`;
