@@ -1921,9 +1921,12 @@ window.billSizeSheet=function(){
   window.wShowPay = () => String((window.WSET || {}).waiter_show_pay) === 'true';
   window.wRefreshSet = async () => { try { const r = await sb.from('settings').select('key,value').eq('key', 'waiter_show_pay'); if (!r.error) window.WSET.waiter_show_pay = r.data && r.data[0] ? r.data[0].value : 'false'; } catch (e) {} };
   window.waiterBillOn = () => String((window.WSET || {}).waiter_bill) === 'true';
-  async function syncSet() { const before = waiterBillOn(); _setAt = 0; await loadSet(); if (before !== waiterBillOn() && window.Staff && Staff.onOrders) { try { Staff.onOrders(Staff.orders, []); } catch (e) {} } }
-  setTimeout(syncSet, 2500); setInterval(syncSet, 60000);
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) syncSet(); });
+  async function syncSet() { const before = waiterBillOn(); _setAt = 0; await loadSet(); const ae = document.activeElement; if (before !== waiterBillOn() && window.Staff && Staff.onOrders && !(ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)) && !document.querySelector('.sheet-wrap')) { try { Staff.onOrders(Staff.orders, []); } catch (e) {} } }
+  async function syncSet2() { const b = String((window.WSET || {}).waiter_show_pay); await syncSet(); await window.wRefreshSet(); if (b !== String(window.WSET.waiter_show_pay)) { try { window.dispatchEvent(new Event('sone:settings')); const ae = document.activeElement; if (!(ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)) && !document.querySelector('.sheet-wrap') && window.Staff && Staff.onOrders) Staff.onOrders(Staff.orders, []); } catch (e) {} } }
+  setTimeout(syncSet2, 2500); setInterval(() => { if (!document.hidden) syncSet2(); }, 15000);
+  try { let t2 = 0; sb.channel('wset-' + Math.random().toString(36).slice(2, 7)).on('postgres_changes', { event: '*', schema: 'public', table: 'settings' }, () => { clearTimeout(t2); t2 = setTimeout(syncSet2, 300); }).subscribe(); } catch (e) {}
+  window.addEventListener('focus', () => syncSet2());
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) syncSet2(); });
   window.orderBill = async function (o) {
     await loadSet();
     if (!waiterBillOn()) return toast(T0('Bill abhi owner ne band rakha hai'), 'err');
