@@ -1436,10 +1436,17 @@ window.SONE_CONFIG = {
   /* ---- rokay hue bill sabhi waiter mobile par (Supabase table pos_drafts, id 'w:...') ---- */
   let dOK = true, dPend = 0, dWarned = false, synced = false, dT;
   const dFail = () => { dOK = false; if (!dWarned) { dWarned = true; toast('Rokay hue bill abhi sirf is phone par hain. Sab phone ke liye sync-live.sql Supabase me chalayein.', 'err'); } };
-  const dPut = async d => { if (!dOK) return; dPend++; try { const { error } = await sb.from('pos_drafts').upsert({ id: 'w:' + d.id, data: d, updated_at: new Date().toISOString() }); if (error) dFail(); } catch (e) { dFail(); } finally { dPend--; } };
-  const dDel = async id => { if (!dOK) return; dPend++; try { const { error } = await sb.from('pos_drafts').delete().eq('id', 'w:' + id); if (error) dFail(); } catch (e) { dFail(); } finally { dPend--; } };
-  const dPull = async () => { if (!dOK || dPend > 0 || !dKey) return; try { const { data, error } = await sb.from('pos_drafts').select('*').like('id', 'w:%').order('updated_at'); if (error) return dFail(); if (dPend > 0) return;
-    drafts = (data || []).map(r => r.data).filter(d => d && Array.isArray(d.bill) && d.bill.length && mineD(d)); saveDrafts(); if ($('#v-pos').classList.contains('active') && $('#pa-name')) draw(); } catch (e) { dFail(); } };
+  let dVer = 0, dSeen = null;
+  const seenKey = () => 'sone_wseen_' + (S.me ? S.me.id : ''), getSeen = () => { if (!dSeen) { try { dSeen = new Set(window.ls.get(seenKey(), []) || []); } catch (e) { dSeen = new Set(); } } return dSeen; }, saveSeen = () => { try { window.ls.set(seenKey(), [...getSeen()].slice(-300)); } catch (e) {} };
+  const dPut = async d => { dVer++; if (!dOK) return; dPend++; try { const { error } = await sb.from('pos_drafts').upsert({ id: 'w:' + d.id, data: d, updated_at: new Date().toISOString() }); if (error) dFail(); } catch (e) { dFail(); } finally { dPend--; } };
+  const dDel = async id => { dVer++; getSeen().delete('w:' + id); saveSeen(); if (!dOK) return; dPend++; try { const { error } = await sb.from('pos_drafts').delete().eq('id', 'w:' + id); if (error) dFail(); } catch (e) { dFail(); } finally { dPend--; } };
+  const dPull = async () => { if (!dOK || dPend > 0 || !dKey) return; const v0 = dVer; try { const { data, error } = await sb.from('pos_drafts').select('*').like('id', 'w:%').order('updated_at'); if (error) return dFail(); if (dPend > 0 || dVer !== v0) { dDeb(); return; }
+    /* सर्वर की सूची से बदलते हैं, पर फ़ोन में रखा ऐसा बिल कभी नहीं मिटाते जो सर्वर पर पहुँचा ही नहीं (वरना रोका हुआ बिल गायब हो जाता था) */
+    const seen = getSeen(), srv = (data || []).filter(r => r.data && Array.isArray(r.data.bill) && r.data.bill.length && mineD(r.data)), ids = new Set(srv.map(r => r.id));
+    srv.forEach(r => seen.add(r.id));
+    const keep = drafts.filter(d => !ids.has('w:' + d.id) && !seen.has('w:' + d.id) && d && Array.isArray(d.bill) && d.bill.length);
+    drafts = srv.map(r => r.data).concat(keep); saveDrafts(); saveSeen(); keep.forEach(d => dPut(d));
+    if ($('#v-pos').classList.contains('active') && $('#pa-name')) draw(); } catch (e) { dFail(); } };
   const dDeb = () => { clearTimeout(dT); dT = setTimeout(dPull, 300); };
   const reMenu = async () => { S.menuAt = 0; await S.loadMenu(true); MENU = S.menu.slice(); const n = $('#pa-name'); if (n && n.value && $('#v-pos').classList.contains('active')) n.oninput(); };
   function startSync() {
